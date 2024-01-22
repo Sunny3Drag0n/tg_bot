@@ -1,33 +1,57 @@
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message, ReplyKeyboardRemove
+from aiogram.types import Message, ReplyKeyboardRemove, CallbackQuery
 from modules.yt_loader import YtLoader
 from keyboards.keyboards_for_questions import get_single_choice_kb
 
 yt = YtLoader()
 router = Router()
 
-yt_link = ""
+video_quality_options=None
+audio_quality_options=None
+video_selected=None
+audio_selected=None
 
 @router.message(Command("download"))
 async def cmd_download(message: Message):
     video_quality_options = yt.get_video_quality_options()
     video_choices=[]
-    for index, option in enumerate(video_quality_options):
-        video_choices.append(f"[{index}] {option.quality()}: {option.file_size()}")
+    for option in video_quality_options:
+        video_choices.append(f"{option.quality()}: {option.file_size()}")
+        
     await message.answer(
         "Выберите качество видео",
-        reply_markup=get_single_choice_kb(choices=video_choices)
-    )
-    audio_quality_options = yt.get_audio_quality_options()
-    audio_choices=[]
-    for index, option in enumerate(video_quality_options):
-        audio_choices.append(f"[{index}] {option.quality()}: {option.file_size()}")
-    await message.answer(
-        "Выберите качество аудио",
-        reply_markup=get_single_choice_kb(choices=audio_choices)
+        reply_markup=get_single_choice_kb(choices=video_choices, callback_prefix="video_quality_options")
     )
 
+def options_selected_index(callback: CallbackQuery, prefix):
+    text = callback.data
+    index=int(text[len(prefix) + 1:])
+    return index
+
+@router.callback_query(F.data.startswith("video_quality_options"))
+async def video_quality_options_selected(callback: CallbackQuery):
+    !!!!!!!!!!!!!!!!
+    video_selected=video_quality_options[options_selected_index("video_quality_options")]
+    
+    audio_quality_options = yt.get_audio_quality_options()
+    audio_choices=[]
+    for option in audio_quality_options:
+        audio_choices.append(f"{option.quality()}: {option.file_size()}")
+    
+    # await callback.message.answer(
+    #     "Выберите качество аудио",
+    #     reply_markup=get_single_choice_kb(choices=audio_choices, callback_prefix="audio_quality_options")
+    # )
+
+
+# @router.callback_query(F.data.startswith("audio_quality_options"))
+# async def audio_quality_options_selected(callback: CallbackQuery):
+#     audio_selected=audio_quality_options[options_selected_index("audio_quality_options")]
+    
+#     await callback.message.answer(
+#         f"selected: {video_selected.quality()} {audio_selected.quality()}"
+#     )
 
 @router.message(F.text.lower() == "да")
 async def answer_yes(message: Message):
