@@ -10,16 +10,29 @@ from handlers import questions, yt_handler
 dp = Dispatcher()
 router = Router()
 
+try:
+    with open("config.json", "r") as config_file:
+        config = json.load(config_file)
+    bot = Bot(config.get("API_TOKEN"))
+except Exception as e:
+    logging.CRITICAL(f"Ошибка при инициализации бота: {str(e)}")
+    exit(1)
+
 @router.message(Command("start"))
 async def cmd_start(message: Message):
-    await message.answer("Привет")
+    logging.info(f"chat_id={message.chat.id}, first_name={message.from_user.first_name}, last_name={message.from_user.last_name}, username={message.from_user.username}")
+    await message.answer(f"Привет {message.from_user.username}")
+
+@router.message(Command("me"))
+async def cmd_start(message: Message):
+    await message.answer(f"chat_id:     {message.chat.id}\n" + 
+                         f"first_name:  {message.from_user.first_name}\n" +
+                         f"last_name:   {message.from_user.last_name}\n" +
+                         f"username:    {message.from_user.username}")
     
 @router.message(F.text)
 async def message_with_text(message: Message):
-    if yt_handler.yt.open_youtube_link(message.text):
-        await message.answer("Это ссылка на видео! /download ?")
-    else:
-        await message.answer("Это текст!")
+    await message.answer("Это текст!")
 
 @router.message(F.sticker)
 async def message_with_sticker(message: Message):
@@ -29,25 +42,23 @@ async def message_with_sticker(message: Message):
 async def message_with_gif(message: Message):
     await message.answer("Это GIF!")
 
-def get_token():
-    # Загрузка данных из JSON файла
+async def startup():
+    logging.debug("Вывод сообщения о запуске")
     try:
-        with open("config.json", "r") as config_file:
-            config = json.load(config_file)
-            API_TOKEN = config.get("API_TOKEN")
-            return API_TOKEN
-    except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
-        print(f"Ошибка при загрузке API_TOKEN из файла: {str(e)}")
-        exit(1)
+        await bot.send_message(chat_id=config.get("ADMIN_ID"), text='Бот запущен')
+    except Exception as e:
+        logging.error(f"Ошибка отправки startup сообщения: {str(e)}")
+
+
 
 async def main() -> None:
     try:
-        bot = Bot(get_token())
         dp.include_routers(questions.router, yt_handler.router, router)
+        dp.startup.register(startup)
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
     except Exception as e:
-        print(f"Ошибка при инициализации бота: {str(e)}")
+        logging.critical(f"Ошибка при запуске бота: {str(e)}")
         exit(1)
         
 

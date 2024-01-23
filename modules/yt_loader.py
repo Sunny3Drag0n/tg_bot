@@ -1,5 +1,6 @@
 import json
 import os
+import logging
 from typing import Optional
 from pytube import YouTube, Stream
 from moviepy.editor import VideoFileClip, AudioFileClip
@@ -34,7 +35,6 @@ class YtLoader:
         try:
             self._yt = YouTube(link)
             self._streams = self._yt.streams
-
             for stream in self._streams:
                 if stream.includes_audio_track:
                     self.audio_qualities.append(StreamInfo(stream))
@@ -53,28 +53,35 @@ class YtLoader:
 
     def download_media(self, video_stream : Optional[StreamInfo] = None, audio_stream : Optional[StreamInfo] = None):
         try:
+            logging.info(f"download_media")
             save_path=self.config.get('save_path', '.')
             if video_stream:
+                logging.info(f"has video")
                 video_path = os.path.join(save_path, f'video_{video_stream.quality()}.mp4')
                 video_stream.stream.download(output_path=save_path, filename=video_path)
                 result_file=video_path
+                logging.info(f"video ready")
 
             if audio_stream:
+                logging.info(f"has audio")
                 audio_path = os.path.join(save_path, f'audio_{audio_stream.quality()}.mp3')
                 audio_stream.stream.download(output_path=save_path, filename=audio_path)
                 result_file=audio_path
+                logging.info(f"audio ready")
                 if video_stream:
+                    logging.info(f"union clip")
                     # Объединяем видео и аудио с использованием moviepy
                     video_clip = VideoFileClip(video_path)
                     audio_clip = AudioFileClip(audio_path)
                     video_clip = video_clip.set_audio(audio_clip)
                     result_file=f'video_with_audio_{video_stream.quality()}_{audio_stream.quality()}.mp4'
                     video_clip.write_videofile(os.path.join(save_path, result_file))
+                    logging.info(f"file ready Файл успешно загружен: {save_path}/{result_file}")
                     # Удаляем временные файлы
                     os.remove(video_path)
                     os.remove(audio_path)
 
-            return f"Файл успешно загружен: {save_path}/{result_file}"
+            return f"{result_file}"
         except Exception as e:
             return f"Ошибка при загрузке медиа: {str(e)}"
 

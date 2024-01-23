@@ -6,13 +6,6 @@ from keyboards.keyboards_for_questions import get_yes_no_kb
 
 router = Router()
 
-@router.message(Command("start"))
-async def cmd_start(message: Message):
-    await message.answer(
-        "Вы довольны своей работой?",
-        reply_markup=get_yes_no_kb()
-    )
-
 @router.message(F.text.lower() == "да")
 async def answer_yes(message: Message):
     await message.answer(
