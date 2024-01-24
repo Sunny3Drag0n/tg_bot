@@ -5,7 +5,7 @@ import asyncio
 from aiogram import Bot, Dispatcher, Router, F, enums
 from aiogram.filters import Command
 from aiogram.types import Message
-from handlers import questions, yt_handler
+from handlers import yt_handler
 
 dp = Dispatcher()
 router = Router()
@@ -47,7 +47,7 @@ async def startup():
 
 async def main() -> None:
     try:
-        dp.include_routers(questions.router, yt_handler.router, router)
+        dp.include_routers(yt_handler.router, router)
         dp.startup.register(startup)
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
