@@ -7,7 +7,7 @@ from aiogram.types import Message, ReplyKeyboardRemove, CallbackQuery
 from aiogram.types.input_file import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 from modules.yt_loader import YtLoader
-from keyboards.keyboards_for_questions import get_single_choice_kb
+import keyboards.keyboards_for_questions as GUI
 
 class Selected:
     def __init__(self):
@@ -40,13 +40,22 @@ selected = Selected()
 async def yt_loader_link_message(message: Message, link : Match[str]):
     logging.info(f"handler yt_link_message: {link.string}")
     if yt.open_youtube_link(link.string):
-        await message.answer("Это ссылка на видео! /download ?")
+        await message.answer(
+            text="Качаем?🙈",
+            reply_markup=GUI.cmd_inline_btn([["Погнали😎", "yt_loader_download"], ["Отмена😕", "yt_loader_pass"]])
+        )
     else:
-        await message.answer("Ты что.. Дурак???\nЭто какая-то неправильная ссылка..")
+        await message.answer("Ты что..🤬 Дурак???\nЭто какая-то неправильная ссылка..")
 
-@router.message(Command("download"))
-async def yt_loader_cmd_download(message: Message):
-    await message.delete()
+@router.callback_query(F.data.startswith("yt_loader_pass"))
+async def yt_loader_cmd_pass(callback: CallbackQuery):
+    # Заглушка
+    await callback.message.delete()
+
+@router.callback_query(F.data.startswith("yt_loader_download"))
+async def yt_loader_cmd_download(callback: CallbackQuery):
+    # Обработчик callback`а для скачивания файла по переданной выше ссылке 
+    await callback.message.delete()
     
     selected.video_quality_options = yt.get_video_quality_options()
     video_choices=[]
@@ -54,18 +63,19 @@ async def yt_loader_cmd_download(message: Message):
         video_choices.append(f"{option.quality()}: {option.file_size()}")
     
     if len(video_choices) == 0:
-        await message.answer(
+        await callback.message.answer(
             "Ошибка! Нет доступа к материалам"
         )
     else:
         video_choices.append("Без видео")
-        await message.answer(
+        await callback.message.answer(
             "Выберите качество видео",
-            reply_markup=get_single_choice_kb(choices=video_choices, callback_prefix="video_quality_options")
+            reply_markup=GUI.get_single_choice_kb(choices=video_choices, callback_prefix="video_quality_options")
         )
 
 @router.callback_query(F.data.startswith("video_quality_options"))
 async def yt_loader_video_quality_options_selected(callback: CallbackQuery):
+    # Обработчик выбора видео. Продолжаем выбор качества для аудио
     selected.set_video_choice(callback=callback)
 
     await callback.message.delete()
@@ -83,67 +93,36 @@ async def yt_loader_video_quality_options_selected(callback: CallbackQuery):
         audio_choices.append("Без звука")
         await callback.message.answer(
             "Выберите качество аудио",
-            reply_markup=get_single_choice_kb(choices=audio_choices, callback_prefix="audio_quality_options")
+            reply_markup=GUI.get_single_choice_kb(choices=audio_choices, callback_prefix="audio_quality_options")
         )
 
 @router.callback_query(F.data.startswith("audio_quality_options"))
 async def yt_loader_audio_quality_options_selected(callback: CallbackQuery):
+    # Обработчик выбора аудио. После выбора начинается загрузка файла выбранного качества
     selected.set_audio_choice(callback=callback)
 
     await callback.message.delete()
-    
+    msg = await callback.message.answer(
+        f"Ожидание завершения загрузки: видео {selected.video_selected.quality() if selected.video_selected else None}, аудио {selected.audio_selected.quality() if selected.audio_selected else None}", 
+    )
+    try:
+        file=yt.download_media(video_stream=selected.video_selected, audio_stream=selected.audio_selected)
+        if file:
+            _, ext = os.path.split(file)
+            media_group = MediaGroupBuilder()
+            if "mp3" in ext:
+                media_group.add_audio(media=FSInputFile(file))
+            if "mp4" in ext:
+                media_group.add_video(media=FSInputFile(file))
+            await callback.message.answer_media_group(
+                media=media_group.build()
+            )
+            await msg.delete()
+            return
+    except Exception as e:
+        logging.error(f"Ошибка при загрузке медиа: {str(e)}")
+    await msg.delete()
     await callback.message.answer(
-        f"Параметры загрузки: видео {selected.video_selected.quality() if selected.video_selected else None}, аудио {selected.audio_selected.quality() if selected.audio_selected else None}"
+        text="Ууупс.. Попробуем снова?😅",
+        reply_markup=GUI.cmd_inline_btn([["Погнали😎", "yt_loader_download"], ["Отмена😕", "yt_loader_pass"]])
     )
-    file=yt.download_media(video_stream=selected.video_selected, audio_stream=selected.audio_selected)
-    # !!!!
-    if file:
-        root, ext = os.path.split(file)
-        media_group = MediaGroupBuilder(caption="Media group caption")
-        if "mp3" in ext:
-            media_group.add(type="audio", media=FSInputFile(file))
-        if "mp4" in ext:
-            media_group.add(type="video", media=FSInputFile(file))
-        await callback.message.answer_media_group(media=file)
-
-
-
-@router.message(F.text.lower() == "да")
-async def answer_yes(message: Message):
-    pass
-    await message.answer(
-        "Это здорово!",
-        reply_markup=ReplyKeyboardRemove()
-    )
-
-    
-def asd():
-    return 0
-
-    video_quality_options = yt.get_video_quality_options()
-    audio_quality_options = yt.get_audio_quality_options()
-
-    print("\nДоступные варианты качества видео:")
-    for index, option in enumerate(video_quality_options):
-        print(f"[{index}] {option.quality()}: {option.file_size()}")
-        
-    selected_video_index = int(input("Введите индекс желаемого качества видео: "))
-    if 0 <= selected_video_index < len(video_quality_options):
-        video_stream=video_quality_options[selected_video_index]
-    else:
-        video_stream=None
-
-    print("\nДоступные варианты качества аудио:")
-    for index, option in enumerate(audio_quality_options):
-        print(f"[{index}] {option.quality()}: {option.file_size()}")
-
-    selected_audio_index = int(input("Введите индекс желаемого качества аудио: "))
-    if 0 <= selected_audio_index < len(audio_quality_options):
-        audio_stream=audio_quality_options[selected_audio_index]
-    else:
-        audio_stream=None
-
-    print(f"\nВыбран: video {video_stream.quality()}, audio {audio_stream.quality()}")
-    result=yt.download_media(video_stream=video_stream, audio_stream=audio_stream)
-    print(result)
-    

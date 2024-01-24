@@ -15,13 +15,16 @@ try:
         config = json.load(config_file)
     bot = Bot(config.get("API_TOKEN"))
 except Exception as e:
-    logging.CRITICAL(f"Ошибка при инициализации бота: {str(e)}")
+    logging.critical(f"Ошибка при инициализации бота: {str(e)}")
     exit(1)
+
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     logging.info(f"chat_id={message.chat.id}, first_name={message.from_user.first_name}, last_name={message.from_user.last_name}, username={message.from_user.username}")
-    await message.answer(f"Привет {message.from_user.username}")
+    text=f'Привет {message.from_user.username}'
+    # регистрация?
+    await message.answer(text)
 
 @router.message(Command("me"))
 async def cmd_start(message: Message):
@@ -29,18 +32,10 @@ async def cmd_start(message: Message):
                          f"first_name:  {message.from_user.first_name}\n" +
                          f"last_name:   {message.from_user.last_name}\n" +
                          f"username:    {message.from_user.username}")
-    
-@router.message(F.text)
-async def message_with_text(message: Message):
-    await message.answer("Это текст!")
 
-@router.message(F.sticker)
-async def message_with_sticker(message: Message):
-    await message.answer("Это стикер!")
-
-@router.message(F.animation)
-async def message_with_gif(message: Message):
-    await message.answer("Это GIF!")
+@router.message(Command("clear"))
+async def cmd_start(message: Message):
+    pass
 
 async def startup():
     logging.debug("Вывод сообщения о запуске")
@@ -48,7 +43,6 @@ async def startup():
         await bot.send_message(chat_id=config.get("ADMIN_ID"), text='Бот запущен')
     except Exception as e:
         logging.error(f"Ошибка отправки startup сообщения: {str(e)}")
-
 
 
 async def main() -> None:

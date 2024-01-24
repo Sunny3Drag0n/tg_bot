@@ -34,6 +34,7 @@ class YtLoader:
         self.audio_qualities.clear()
         try:
             self._yt = YouTube(link)
+            self._yt.check_availability()
             self._streams = self._yt.streams
             for stream in self._streams:
                 if stream.includes_audio_track:
@@ -52,38 +53,35 @@ class YtLoader:
         return self.audio_qualities
 
     def download_media(self, video_stream : Optional[StreamInfo] = None, audio_stream : Optional[StreamInfo] = None):
-        try:
-            logging.info(f"download_media")
-            save_path=self.config.get('save_path', '.')
-            if video_stream:
-                logging.info(f"has video")
-                video_path = os.path.join(save_path, f'video_{video_stream.quality()}.mp4')
-                video_stream.stream.download(output_path=save_path, filename=video_path)
-                result_file=video_path
-                logging.info(f"video ready")
-
+        save_path=self.config.get('save_path', '.')
+        title=self._yt.title
+        if audio_stream:
+            logging.info(f"[yt_loader:download_media] audio loading")
+            audio_path = os.path.join(save_path, f'{title}_{audio_stream.quality()}.mp3')
+            audio_stream.stream.download(filename=audio_path)
+            result_file=audio_path
+            logging.info(f"[yt_loader:download_media] audio ready")
+        if video_stream:
+            logging.info(f"[yt_loader:download_media] video loading")
+            video_path = os.path.join(save_path, f'{title}_{video_stream.quality()}.mp4')
+            video_stream.stream.download(filename=video_path)
+            result_file=video_path
+            logging.info(f"[yt_loader:download_media] video ready")
             if audio_stream:
-                logging.info(f"has audio")
-                audio_path = os.path.join(save_path, f'audio_{audio_stream.quality()}.mp3')
-                audio_stream.stream.download(output_path=save_path, filename=audio_path)
-                result_file=audio_path
-                logging.info(f"audio ready")
-                if video_stream:
-                    logging.info(f"union clip")
-                    # Объединяем видео и аудио с использованием moviepy
-                    video_clip = VideoFileClip(video_path)
-                    audio_clip = AudioFileClip(audio_path)
-                    video_clip = video_clip.set_audio(audio_clip)
-                    result_file=f'video_with_audio_{video_stream.quality()}_{audio_stream.quality()}.mp4'
-                    video_clip.write_videofile(os.path.join(save_path, result_file))
-                    logging.info(f"file ready Файл успешно загружен: {save_path}/{result_file}")
-                    # Удаляем временные файлы
-                    os.remove(video_path)
-                    os.remove(audio_path)
+                logging.info(f"[yt_loader:download_media] union clip")
+                # Объединяем видео и аудио с использованием moviepy
+                video_clip = VideoFileClip(video_path)
+                audio_clip = AudioFileClip(audio_path)
+                video_clip = video_clip.set_audio(audio_clip)
+                result_file=os.path.join(save_path, f'{title}_{video_stream.quality()}_{audio_stream.quality()}.mp4')
+                video_clip.write_videofile(result_file)
+                # Удаляем временные файлы
+                os.remove(video_path)
+                os.remove(audio_path)
+        if result_file:
+            logging.info(f"Файл успешно загружен: {result_file}")
+        return result_file
 
-            return f"{result_file}"
-        except Exception as e:
-            return f"Ошибка при загрузке медиа: {str(e)}"
 
     def split_video(self, video_path):
         max_file_size = 1024 * 1024 * self.config.get('max_file_size', 100)  # Default to 100 MB
