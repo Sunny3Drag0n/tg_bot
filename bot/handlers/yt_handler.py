@@ -2,12 +2,11 @@ import logging
 import os
 from re import Match
 from aiogram import Router, F
-from aiogram.filters import Command
-from aiogram.types import Message, ReplyKeyboardRemove, CallbackQuery
+from aiogram.types import Message, CallbackQuery
 from aiogram.types.input_file import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 from modules.yt_loader import YtLoader
-import keyboards.keyboards_for_questions as GUI
+import bot.keyboards.inline_callback_keyboards as GUI
 
 class Selected:
     def __init__(self):

@@ -2,16 +2,16 @@ import json
 import logging
 import sys
 import asyncio
-from aiogram import Bot, Dispatcher, Router, F, enums
+from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import Command
 from aiogram.types import Message
-from handlers import yt_handler
+import handlers
 
 dp = Dispatcher()
 router = Router()
 
 try:
-    with open("config.json", "r") as config_file:
+    with open("configs/bot.json", "r") as config_file:
         config = json.load(config_file)
     bot = Bot(config.get("API_TOKEN"))
 except Exception as e:
@@ -47,7 +47,7 @@ async def startup():
 
 async def main() -> None:
     try:
-        dp.include_routers(yt_handler.router, router)
+        dp.include_routers(handlers.yt_handler.router, router)
         dp.startup.register(startup)
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
