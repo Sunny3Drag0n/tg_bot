@@ -52,6 +52,8 @@ class YtLoader:
 
     def download_media(self, video_stream : Optional[StreamInfo] = None, audio_stream : Optional[StreamInfo] = None):
         save_path=self.config.get('save_path', '.')
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
         title=self._yt.title
         if audio_stream:
             logging.info(f"[yt_loader:download_media] audio loading")

@@ -68,7 +68,7 @@ async def yt_loader_cmd_download(callback: CallbackQuery):
         video_choices.append("Без видео")
         await callback.message.answer(
             "Выберите качество видео",
-            reply_markup=GUI.get_single_choice_kb(choices=video_choices, callback_prefix="video_quality_options")
+            reply_markup=GUI.inline_callback_keyboards.get_single_choice_kb(choices=video_choices, callback_prefix="video_quality_options")
         )
 
 @router.callback_query(F.data.startswith("video_quality_options"))
@@ -91,7 +91,7 @@ async def yt_loader_video_quality_options_selected(callback: CallbackQuery):
         audio_choices.append("Без звука")
         await callback.message.answer(
             "Выберите качество аудио",
-            reply_markup=GUI.get_single_choice_kb(choices=audio_choices, callback_prefix="audio_quality_options")
+            reply_markup=GUI.inline_callback_keyboards.get_single_choice_kb(choices=audio_choices, callback_prefix="audio_quality_options")
         )
 
 @router.callback_query(F.data.startswith("audio_quality_options"))
@@ -115,12 +115,19 @@ async def yt_loader_audio_quality_options_selected(callback: CallbackQuery):
             await callback.message.answer_media_group(
                 media=media_group.build()
             )
-            await msg.delete()
+            try:
+                await msg.delete()
+            except Exception as e:
+                logging.error(f"Ошибка при попытке удалить сообщение {msg.message_id}: {str(e)}")
             return
     except Exception as e:
         logging.error(f"Ошибка при загрузке медиа: {str(e)}")
-    await msg.delete()
+
+    try:
+        await msg.delete()
+    except Exception as e:
+        logging.error(f"Ошибка при попытке удалить сообщение {msg.message_id}: {str(e)}")
     await callback.message.answer(
         text="Ууупс.. Попробуем снова?😅",
-        reply_markup=GUI.cmd_inline_btn([["Погнали😎", "yt_loader_download"], ["Отмена😕", "yt_loader_pass"]])
+        reply_markup=GUI.inline_callback_keyboards.cmd_inline_btn([["Погнали😎", "yt_loader_download"], ["Отмена😕", "yt_loader_pass"]])
     )
