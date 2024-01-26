@@ -1,29 +1,28 @@
-import logging
-import os
+import logging, os
 from re import Match
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.types.input_file import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 from modules.yt_loader import YtLoader
-import bot.keyboards.inline_callback_keyboards as GUI
+import keyboards as GUI
 
 class Selected:
     def __init__(self):
         pass
-    
+
     def options_selected_index(self, callback: CallbackQuery, prefix):
         text = callback.data
         index=int(text[len(prefix) + 1:])
         return index
-    
+
     def set_video_choice(self, callback: CallbackQuery):
         index=self.options_selected_index(callback=callback, prefix="video_quality_options")
         if index >= len(self.video_quality_options):
             self.video_selected=None
         else:
             self.video_selected=self.video_quality_options[index]
-    
+
     def set_audio_choice(self, callback: CallbackQuery):
         index=self.options_selected_index(callback=callback, prefix="audio_quality_options")
         if index >= len(self.audio_quality_options):
@@ -41,7 +40,7 @@ async def yt_loader_link_message(message: Message, link : Match[str]):
     if yt.open_youtube_link(link.string):
         await message.answer(
             text="Качаем?🙈",
-            reply_markup=GUI.cmd_inline_btn([["Погнали😎", "yt_loader_download"], ["Отмена😕", "yt_loader_pass"]])
+            reply_markup=GUI.inline_callback_keyboards.cmd_inline_btn([["Погнали😎", "yt_loader_download"], ["Отмена😕", "yt_loader_pass"]])
         )
     else:
         await message.answer("Ты что..🤬 Дурак???\nЭто какая-то неправильная ссылка..")
@@ -55,12 +54,12 @@ async def yt_loader_cmd_pass(callback: CallbackQuery):
 async def yt_loader_cmd_download(callback: CallbackQuery):
     # Обработчик callback`а для скачивания файла по переданной выше ссылке 
     await callback.message.delete()
-    
+
     selected.video_quality_options = yt.get_video_quality_options()
     video_choices=[]
     for option in selected.video_quality_options:
         video_choices.append(f"{option.quality()}: {option.file_size()}")
-    
+
     if len(video_choices) == 0:
         await callback.message.answer(
             "Ошибка! Нет доступа к материалам"

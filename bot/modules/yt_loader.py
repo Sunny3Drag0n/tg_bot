@@ -1,6 +1,4 @@
-import json
-import os
-import logging
+import json, os, logging
 from typing import Optional
 from pytube import YouTube, Stream
 from moviepy.editor import VideoFileClip, AudioFileClip
