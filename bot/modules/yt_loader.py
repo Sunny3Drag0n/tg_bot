@@ -55,6 +55,7 @@ class YtLoader:
         if not os.path.exists(save_path):
             os.makedirs(save_path)
         title=self._yt.title
+        title=title.replace('/','_')
         if audio_stream:
             logging.info(f"[yt_loader:download_media] audio loading")
             audio_path = os.path.join(save_path, f'{title}_{audio_stream.quality()}.mp3')
