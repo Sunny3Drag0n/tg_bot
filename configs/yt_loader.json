@@ -1,5 +1,5 @@
 {
-    "max_file_size": 200,
-    "max_chunk_size": 50,
+    "max_file_size": 49,
+    "max_chunk_size": 49,
     "save_path": "downloads"
 }

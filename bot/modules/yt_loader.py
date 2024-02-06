@@ -1,26 +1,75 @@
-import json, os, logging
+import json, os, logging, re, pathlib
 from typing import Optional
 from pytube import YouTube, Stream
 from moviepy.editor import VideoFileClip, AudioFileClip
+from moviepy.Clip import Clip
 
-class StreamInfo():
-    def __init__(self, stream : Stream):
-        self.stream = stream
+class MediaContainer:
+    def __init__(self, file, stream : Stream):
+        self.is_audio = not stream.includes_video_track
+        self.is_video = stream.includes_video_track
+        self.set_source_file(file)
 
-    def quality(self):
-        if self.stream.includes_audio_track:
-            return self.stream.abr
+    def get_source_file(self):
+        return os.path.join(self.dir, f"{self.name}{self.ext}")
+
+    def set_source_file(self, file):
+        self.dir = pathlib.Path(file).parent
+        self.ext = pathlib.Path(file).suffix
+        self.name = pathlib.Path(file).stem
+        self.filesize_bytes = os.path.getsize(self.get_source_file())
+        if self.is_audio:
+            self._audio_clip = AudioFileClip(file)
+            self.clip = self._audio_clip
+        elif self.is_video:
+            self._video_clip = VideoFileClip(file)
+            self.clip = self._video_clip
         else:
-            return self.stream.resolution
+            raise Exception('MediaContainer is not media')
 
-    def file_size(self):
-        return f"{self.stream.filesize / (1024 * 1024):.2f} MB"
+    def split_media_into_chunks(self, chunk_size_mb):
+        clip = self.clip
+        target_size_bytes = chunk_size_mb * 1024 * 1024
+        if self.filesize_bytes < target_size_bytes:
+            logging.info(f"[yt_loader:split_media_into_chunks] no need split")
+            return [self.get_source_file()]
+        resources = []
+        total_duration = clip.duration
+        chunk_number = 1
+        
+        clip_max_duration = target_size_bytes * total_duration / self.filesize_bytes
+        logging.info(f"[yt_loader:split_media_into_chunks] clip_max_duration {clip_max_duration}, total_duration {total_duration}")
+
+        while clip.duration > 0:
+            # Определяем длительность чанка, ограниченного заданным размером
+            chunk_duration = min(clip.duration, clip_max_duration)
+            logging.info(f"[yt_loader:split_media_into_chunks] chunk {chunk_number}, chunk_duration {chunk_duration}")
+            
+            # Вырезаем фрагмент
+            chunk = clip.subclip(0, chunk_duration)
+            
+            # Сохраняем чанк
+            output_file = os.path.join(self.dir, f"{self.name}_{chunk_number}{self.ext}")
+            if self.is_video:
+                chunk.write_videofile(output_file)
+            if self.is_audio:
+                chunk.write_audiofile(output_file)
+                
+            resources.append(output_file)
+            
+            # Удаляем сохраненный фрагмент из оставшегося
+            clip = clip.subclip(chunk_duration)
+            chunk_number += 1
+        return resources
+
 
 class YtLoader:
     def __init__(self, config_path='configs/yt_loader.json'):
         self.config = self._load_config(config_path)
-        self.video_qualities = []
-        self.audio_qualities = []
+        self.video_streams = []
+        self.audio_streams = []
+        self.link = None
+        self.media : MediaContainer = None
 
     def _load_config(self, config_path):
         with open(config_path, 'r') as config_file:
@@ -28,80 +77,78 @@ class YtLoader:
         return config
 
     def open_youtube_link(self, link):
-        self.video_qualities.clear()
-        self.audio_qualities.clear()
+        self.video_streams.clear()
+        self.audio_streams.clear()
         try:
             self._yt = YouTube(link)
-            self._yt.check_availability()
-            self._streams = self._yt.streams
-            for stream in self._streams:
-                if stream.includes_audio_track:
-                    self.audio_qualities.append(StreamInfo(stream))
-                else:
-                    self.video_qualities.append(StreamInfo(stream))
+            self.link = link
             return True
         except Exception as e:
             print(f"Ошибка при открытии ссылки: {str(e)}")
             return False
 
-    def get_video_quality_options(self):
-        return self.video_qualities
-
-    def get_audio_quality_options(self):
-        return self.audio_qualities
-
-    def download_media(self, video_stream : Optional[StreamInfo] = None, audio_stream : Optional[StreamInfo] = None):
+    def get_video_streams(self):
+        if len(self.video_streams) == 0:
+            for stream in self._yt.streams:
+                if stream.type == 'video':
+                    self.video_streams.append(stream)
+                elif stream.type == 'audio':
+                    self.audio_streams.append(stream)
+        return self.video_streams
+    
+    def get_audio_streams(self):
+        if len(self.audio_streams) == 0:
+            for stream in self._yt.streams:
+                if stream.type == 'video':
+                    self.video_streams.append(stream)
+                elif stream.type == 'audio':
+                    self.audio_streams.append(stream)
+        return self.audio_streams
+    
+    def download_media(self, video_stream : Optional[Stream] = None, audio_stream : Optional[Stream] = None):
+        if not video_stream and not audio_stream:
+            return None
+        # if self.media: проверить video_stream audio_stream те же или нет
+        #     logging.info(f"[yt_loader:download_media] already download")
+        #     return self.media
         save_path=self.config.get('save_path', '.')
         if not os.path.exists(save_path):
             os.makedirs(save_path)
+        
         title=self._yt.title
-        title=title.replace('/','_')
+        title = re.sub(r'[^\w]', ' ', title)
+        title=title.replace(' ','_')
+        
+        audio_media : MediaContainer = None
+        
         if audio_stream:
             logging.info(f"[yt_loader:download_media] audio loading")
-            audio_path = os.path.join(save_path, f'{title}_{audio_stream.quality()}.mp3')
-            audio_stream.stream.download(filename=audio_path)
-            result_file=audio_path
-            logging.info(f"[yt_loader:download_media] audio ready")
+            audio_path = os.path.join(save_path, f'{title}_{audio_stream.abr}.mp3')
+            audio_stream.download(filename=audio_path)
+            logging.info(f"[yt_loader:download_media] audio ready. Creating container")
+            audio_media=MediaContainer(file=audio_path, stream=audio_stream)
+            media=audio_media
+            logging.info(f"[yt_loader:download_media] audio container ready")
+
         if video_stream:
             logging.info(f"[yt_loader:download_media] video loading")
-            video_path = os.path.join(save_path, f'{title}_{video_stream.quality()}.mp4')
-            video_stream.stream.download(filename=video_path)
-            result_file=video_path
-            logging.info(f"[yt_loader:download_media] video ready")
-            if audio_stream:
-                logging.info(f"[yt_loader:download_media] union clip")
+            video_path = os.path.join(save_path, f'{title}_{video_stream.resolution}.{video_stream.subtype}')
+            video_stream.download(filename=video_path)
+            logging.info(f"[yt_loader:download_media] video ready. Creating container")
+            media=MediaContainer(file=video_path, stream=video_stream)
+            logging.info(f"[yt_loader:download_media] video container ready")
+            if audio_media:
+                logging.info(f"[yt_loader:download_media] set_audio")
                 # Объединяем видео и аудио с использованием moviepy
-                video_clip = VideoFileClip(video_path)
-                audio_clip = AudioFileClip(audio_path)
-                video_clip = video_clip.set_audio(audio_clip)
-                result_file=os.path.join(save_path, f'{title}_{video_stream.quality()}_{audio_stream.quality()}.mp4')
-                video_clip.write_videofile(result_file)
+                media.clip.set_audio(audio_media.clip)
+                result_file=os.path.join(save_path, f'{title}_{video_stream.resolution}_{audio_stream.abr}.{video_stream.subtype}')
+                media.clip.write_videofile(result_file)
+                logging.info(f"[yt_loader:download_media] write_videofile ok")
+                media.set_source_file(file=result_file)
                 # Удаляем временные файлы
+                audio_media.clip.close()
                 os.remove(video_path)
                 os.remove(audio_path)
-        if result_file:
-            logging.info(f"Файл успешно загружен: {result_file}")
-        return result_file
+        # self.media = media
+        return media
 
-
-    def split_video(self, video_path):
-        max_file_size = 1024 * 1024 * self.config.get('max_file_size', 100)  # Default to 100 MB
-        file_size = os.path.getsize(video_path)
-
-        split_files = []
-        if file_size <= max_file_size:
-            split_files.append(video_path)
-            return split_files
-
-        max_chunk_size = 1024 * 1024 * self.config.get('max_chunk_size', 10)  # Default to 10 MB
-        num_chunks = file_size // max_chunk_size + (file_size % max_chunk_size > 0)
-
-        with open(video_path, 'rb') as video_file:
-            for i in range(num_chunks):
-                chunk_data = video_file.read(max_chunk_size)
-                chunk_file_path = f"{video_path}_part_{i+1}"
-                split_files.append(chunk_file_path)
-                with open(chunk_file_path, 'wb') as chunk_file:
-                    chunk_file.write(chunk_data)
-
-        return split_files

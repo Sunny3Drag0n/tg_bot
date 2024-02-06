@@ -1,133 +1,185 @@
-import logging, os
+import logging, pathlib
 from re import Match
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.types.input_file import FSInputFile
 from aiogram.utils.media_group import MediaGroupBuilder
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from modules.yt_loader import YtLoader
 import keyboards as GUI
 
-class Selected:
-    def __init__(self):
-        pass
-
-    def options_selected_index(self, callback: CallbackQuery, prefix):
-        text = callback.data
-        index=int(text[len(prefix) + 1:])
-        return index
-
-    def set_video_choice(self, callback: CallbackQuery):
-        index=self.options_selected_index(callback=callback, prefix="video_quality_options")
-        if index >= len(self.video_quality_options):
-            self.video_selected=None
-        else:
-            self.video_selected=self.video_quality_options[index]
-
-    def set_audio_choice(self, callback: CallbackQuery):
-        index=self.options_selected_index(callback=callback, prefix="audio_quality_options")
-        if index >= len(self.audio_quality_options):
-            self.audio_selected=None
-        else:
-            self.audio_selected=self.audio_quality_options[index]
-
-yt = YtLoader()
 router = Router()
-selected = Selected()
+yt_loaders : dict[int, YtLoader] = {}
 
-@router.message(F.text.regexp("^((?:https?:)?\/\/)?((?:www|m)\.)?((?:youtube(-nocookie)?\.com|youtu.be))(\/(?:[\w\-]+\?v=|embed\/|live\/|v\/)?)([\w\-]+)(\S+)?$").as_("link"))
-async def yt_loader_link_message(message: Message, link : Match[str]):
-    logging.info(f"handler yt_link_message: {link.string}")
-    if yt.open_youtube_link(link.string):
-        await message.answer(
+class DownloadState(StatesGroup):
+    download_type_selection = State()
+    video_stream_selection = State()
+    audio_stream_selection = State()
+
+def get_info(stream):
+    info = ''
+    if stream.includes_video_track:
+        info = f'[video:{stream.resolution}]'
+    if stream.includes_audio_track:
+        info = f'{info}[audio:{stream.abr}]'
+    
+    return f'{info}[size:{stream.filesize_mb} Mb]'
+        
+async def select_download(message : Message, state: FSMContext):
+    await state.set_state(DownloadState.download_type_selection)
+    await message.answer(
             text="Качаем?🙈",
-            reply_markup=GUI.inline_callback_keyboards.cmd_inline_btn([["Погнали😎", "yt_loader_download"], ["Отмена😕", "yt_loader_pass"]])
+            reply_markup=GUI.inline_callback_keyboards.cmd_inline_btn([
+                ["Скачать видео 📼", "yt_loader_download_video"],
+                ["Скачать аудио 🎶", "yt_loader_download_audio"],
+                ["Отмена😕", "yt_loader_pass"]
+            ])
         )
-    else:
-        await message.answer("Ты что..🤬 Дурак???\nЭто какая-то неправильная ссылка..")
 
-@router.callback_query(F.data.startswith("yt_loader_pass"))
-async def yt_loader_cmd_pass(callback: CallbackQuery):
-    # Заглушка
-    await callback.message.delete()
-
-@router.callback_query(F.data.startswith("yt_loader_download"))
-async def yt_loader_cmd_download(callback: CallbackQuery):
-    # Обработчик callback`а для скачивания файла по переданной выше ссылке 
-    await callback.message.delete()
-
-    selected.video_quality_options = yt.get_video_quality_options()
+async def select_video(message : Message, state: FSMContext) -> bool:
+    # Выбираем видеопоток
+    yt = yt_loaders[message.chat.id]
     video_choices=[]
-    for option in selected.video_quality_options:
-        video_choices.append(f"{option.quality()}: {option.file_size()}")
+    for stream in yt.get_video_streams():
+        video_choices.append(get_info(stream))
 
     if len(video_choices) == 0:
-        await callback.message.answer(
-            "Ошибка! Нет доступа к материалам"
-        )
+        await message.answer("Ошибка! Нет доступа к материалам")
+        return False
     else:
-        video_choices.append("Без видео")
-        await callback.message.answer(
+        await message.answer(
             "Выберите качество видео",
-            reply_markup=GUI.inline_callback_keyboards.get_single_choice_kb(choices=video_choices, callback_prefix="video_quality_options")
+            reply_markup=GUI.inline_callback_keyboards.get_single_choice_kb(choices=video_choices, callback_prefix="yt_loader_video_selection_")
         )
+        await state.set_state(DownloadState.video_stream_selection)
+        return True
 
-@router.callback_query(F.data.startswith("video_quality_options"))
-async def yt_loader_video_quality_options_selected(callback: CallbackQuery):
-    # Обработчик выбора видео. Продолжаем выбор качества для аудио
-    selected.set_video_choice(callback=callback)
-
-    await callback.message.delete()
-
-    selected.audio_quality_options = yt.get_audio_quality_options()
+async def select_audio(message : Message, state: FSMContext) -> bool:
+    # Выбираем аудиопоток
+    yt = yt_loaders[message.chat.id]
     audio_choices=[]
-    for option in selected.audio_quality_options:
-        audio_choices.append(f"{option.quality()}: {option.file_size()}")
+    for stream in yt.get_audio_streams():
+        audio_choices.append(get_info(stream))
 
     if len(audio_choices) == 0:
-        await callback.message.answer(
-            "Ошибка! Нет доступа к материалам"
-        )
+        await message.answer("Ошибка! Нет доступа к материалам")
+        return False
     else:
-        audio_choices.append("Без звука")
-        await callback.message.answer(
+        current_state_data = await state.get_data()
+        video_selected = current_state_data.get('video_stream')
+        if video_selected:
+            audio_choices.append("Без звука")
+        await message.answer(
             "Выберите качество аудио",
-            reply_markup=GUI.inline_callback_keyboards.get_single_choice_kb(choices=audio_choices, callback_prefix="audio_quality_options")
+            reply_markup=GUI.inline_callback_keyboards.get_single_choice_kb(choices=audio_choices, callback_prefix="yt_loader_audio_selection_")
         )
+        await state.set_state(DownloadState.audio_stream_selection)
+        return True
 
-@router.callback_query(F.data.startswith("audio_quality_options"))
-async def yt_loader_audio_quality_options_selected(callback: CallbackQuery):
-    # Обработчик выбора аудио. После выбора начинается загрузка файла выбранного качества
-    selected.set_audio_choice(callback=callback)
-
-    await callback.message.delete()
-    msg = await callback.message.answer(
-        f"Ожидание завершения загрузки: видео {selected.video_selected.quality() if selected.video_selected else None}, аудио {selected.audio_selected.quality() if selected.audio_selected else None}", 
+async def on_download_error(message : Message):
+    await message.answer(
+        text="Ууупс.. Попробуем снова?😅",
+        reply_markup=GUI.inline_callback_keyboards.cmd_inline_btn([
+            ["Погнали😎", "yt_loader_download_again"],
+            ["Отмена😕", "yt_loader_pass"]
+        ])
     )
+
+async def download_media(message : Message, state: FSMContext):
     try:
-        file=yt.download_media(video_stream=selected.video_selected, audio_stream=selected.audio_selected)
-        if file:
-            _, ext = os.path.split(file)
-            media_group = MediaGroupBuilder()
-            if "mp3" in ext:
-                media_group.add_audio(media=FSInputFile(file))
-            if "mp4" in ext:
-                media_group.add_video(media=FSInputFile(file))
-            await callback.message.answer_media_group(
-                media=media_group.build()
-            )
-            try:
-                await msg.delete()
-            except Exception as e:
-                logging.error(f"Ошибка при попытке удалить сообщение {msg.message_id}: {str(e)}")
-            return
+        yt : YtLoader = yt_loaders[message.chat.id]
+        current_state_data = await state.get_data()
+        video_stream = current_state_data.get('video_stream')
+        audio_stream = current_state_data.get('audio_stream')
+        msg = await message.answer(
+            f"Ожидание завершения загрузки: видеопоток {video_stream.resolution if video_stream else None}, аудиопоток {audio_stream.abr if audio_stream else None}", 
+        )
+        media_container = yt.download_media(video_stream=video_stream, audio_stream=audio_stream)
+        if media_container:
+            resources = media_container.split_media_into_chunks(chunk_size_mb=49)
+            for chunk in resources:
+                media_group = MediaGroupBuilder()
+                if media_container.is_audio:
+                    media_group.add_audio(media=FSInputFile(chunk))
+                if media_container.is_video:
+                    media_group.add_video(media=FSInputFile(chunk))
+                await message.answer_media_group(
+                    media=media_group.build()
+                )
+            await msg.delete()
+        else:
+            await on_download_error(message=message)
     except Exception as e:
         logging.error(f"Ошибка при загрузке медиа: {str(e)}")
+        await on_download_error(message=message)
 
-    try:
-        await msg.delete()
-    except Exception as e:
-        logging.error(f"Ошибка при попытке удалить сообщение {msg.message_id}: {str(e)}")
-    await callback.message.answer(
-        text="Ууупс.. Попробуем снова?😅",
-        reply_markup=GUI.inline_callback_keyboards.cmd_inline_btn([["Погнали😎", "yt_loader_download"], ["Отмена😕", "yt_loader_pass"]])
-    )
+@router.message(F.text.regexp("^((?:https?:)?\/\/)?((?:www|m)\.)?((?:youtube(-nocookie)?\.com|youtu.be))(\/(?:[\w\-]+\?v=|embed\/|live\/|v\/)?)([\w\-]+)(\S+)?$").as_("link"))
+async def yt_loader_link_message(message: Message, link : Match[str], state: FSMContext):
+    yt = yt_loaders.get(message.chat.id)
+    if yt and yt.link == link.string:
+        logging.info(f"[handler yt_loader_link_message]: {link.string} already opened")
+        await state.update_data(link = link.string)
+        await select_download(message, state)
+    else:
+        yt_loaders[message.chat.id] = YtLoader()
+        yt = yt_loaders.get(message.chat.id)
+        logging.info(f"[handler yt_loader_link_message]: {link.string}")
+        if yt.open_youtube_link(link.string):
+            await state.update_data(link = link)
+            await select_download(message, state)
+        else:
+            await message.answer("Неправильная ссылка..😕")
+            await state.clear()
+
+@router.callback_query(F.data.startswith("yt_loader_pass"))
+async def yt_loader_pass(callback: CallbackQuery, state: FSMContext):
+    await callback.message.delete()
+    await state.clear()
+
+@router.callback_query(F.data.startswith("yt_loader_download_video"))
+async def yt_loader_download_video(callback: CallbackQuery, state: FSMContext):
+    if await select_video(callback.message, state):
+        await callback.message.delete()
+
+@router.callback_query(F.data.startswith("yt_loader_download_audio"))
+async def yt_loader_download_audio(callback: CallbackQuery, state: FSMContext):
+    if await select_audio(callback.message, state):
+        await callback.message.delete()
+    
+@router.callback_query(F.data.startswith("yt_loader_video_selection"))
+async def yt_loader_video_selected(callback: CallbackQuery, state: FSMContext):
+    option = callback.data
+    index=int(option.removeprefix('yt_loader_video_selection_'))
+    yt : YtLoader = yt_loaders[callback.message.chat.id]
+    video_stream = yt.get_video_streams()[index]
+    await state.update_data(video_stream=video_stream)
+    await callback.message.delete()
+    if not video_stream.includes_audio_track:
+        # Предложить добавить аудиодорожку
+        await select_audio(callback.message, state)
+    else:
+        await download_media(callback.message, state)
+
+@router.callback_query(F.data.startswith("yt_loader_audio_selection"))
+async def yt_loader_audio_selected(callback: CallbackQuery, state: FSMContext):
+    option = callback.data
+    index=int(option.removeprefix('yt_loader_audio_selection_'))
+    yt : YtLoader = yt_loaders[callback.message.chat.id]
+    streams = yt.get_audio_streams()
+    if index >= len(streams):
+        audio_stream = None
+    else:
+        audio_stream = streams[index]
+    await state.update_data(audio_stream=audio_stream)
+    await callback.message.delete()
+    await download_media(callback.message, state)
+
+@router.callback_query(F.data.startswith("yt_loader_download_again"))
+async def yt_loader_audio_selected(callback: CallbackQuery, state: FSMContext):
+    pass
+    await callback.message.delete()
+    await state.clear()
+    await select_download(callback.message, state)
+
+# надо с выбором что грузить
