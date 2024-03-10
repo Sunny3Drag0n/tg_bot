@@ -1,8 +1,16 @@
-import json, os, logging, re, pathlib
+import json, os, logging, re, pathlib, subprocess
 from typing import Optional
 from pytube import YouTube, Stream
 from moviepy.editor import VideoFileClip, AudioFileClip
-from moviepy.Clip import Clip
+
+def get_media_info(file_path):
+    cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', file_path]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print("Error running ffprobe:", result.stderr)
+        return None
+    media_info = json.loads(result.stdout)
+    return media_info
 
 class MediaContainer:
     def __init__(self, file, stream : Stream):
@@ -27,47 +35,41 @@ class MediaContainer:
         else:
             raise Exception('MediaContainer is not media')
 
+    def split_video_ffmpeg(self, clip_max_duration):
+        output_file = os.path.join(self.dir, f"{self.name}_chunk_%03d{self.ext}")
+        logging.info(f"[yt_loader:split_video_ffmpeg] segment_time {clip_max_duration}")
+        command = f'ffmpeg -i {self.get_source_file()} -c:v copy -c:a copy -segment_time {clip_max_duration} -map 0 -f segment {output_file}'
+        subprocess.call(command, shell=True)
+        paths = sorted(pathlib.Path(self.dir).glob(f'{self.name}_chunk_*'))
+        return list(map(str, paths))
+
     def split_media_into_chunks(self, chunk_size_mb):
-        clip = self.clip
         target_size_bytes = chunk_size_mb * 1024 * 1024
         if self.filesize_bytes < target_size_bytes:
             logging.info(f"[yt_loader:split_media_into_chunks] no need split")
             return [self.get_source_file()]
-        resources = []
-        total_duration = clip.duration
-        chunk_number = 1
         
-        clip_max_duration = target_size_bytes * total_duration / self.filesize_bytes
-        logging.info(f"[yt_loader:split_media_into_chunks] clip_max_duration {clip_max_duration}, total_duration {total_duration}")
-
-        while clip.duration > 0:
-            # Определяем длительность чанка, ограниченного заданным размером
-            chunk_duration = min(clip.duration, clip_max_duration)
-            logging.info(f"[yt_loader:split_media_into_chunks] chunk {chunk_number}, chunk_duration {chunk_duration}")
-            
-            # Вырезаем фрагмент
-            chunk = clip.subclip(0, chunk_duration)
-            
-            # Сохраняем чанк
-            output_file = os.path.join(self.dir, f"{self.name}_{chunk_number}{self.ext}")
-            if self.is_video:
-                chunk.write_videofile(output_file)
-            if self.is_audio:
-                chunk.write_audiofile(output_file)
-                
-            resources.append(output_file)
-            
-            # Удаляем сохраненный фрагмент из оставшегося
-            clip = clip.subclip(chunk_duration)
-            chunk_number += 1
-        return resources
+        clip_duration = target_size_bytes * self.clip.duration / self.filesize_bytes
+        logging.info(f"[yt_loader:split_media_into_chunks] try split. duration {clip_duration}/{self.clip.duration}")
+        ready = False
+        while not ready:
+            files = media.split_video_ffmpeg(clip_max_duration = clip_duration)
+            ready = True
+            for file in files:
+                size = os.path.getsize(file)
+                if size > target_size_bytes:
+                    clip_duration /= 1.8
+                    ready = False
+                    logging.info(f"[yt_loader:split_media_into_chunks] too large chunks. Retry with duration: {clip_duration}")
+                    break
+        return files
 
 
 class YtLoader:
     def __init__(self, config_path='configs/yt_loader.json'):
         self.config = self._load_config(config_path)
-        self.video_streams = []
-        self.audio_streams = []
+        self.video_streams : list[Stream] = []
+        self.audio_streams : list[Stream] = []
         self.link = None
         self.media : MediaContainer = None
 
@@ -76,7 +78,7 @@ class YtLoader:
             config = json.load(config_file)
         return config
 
-    def open_youtube_link(self, link):
+    def open_youtube_link(self, link) -> bool:
         self.video_streams.clear()
         self.audio_streams.clear()
         try:
@@ -87,7 +89,7 @@ class YtLoader:
             print(f"Ошибка при открытии ссылки: {str(e)}")
             return False
 
-    def get_video_streams(self):
+    def get_video_streams(self) -> list[Stream]:
         if len(self.video_streams) == 0:
             for stream in self._yt.streams:
                 if stream.type == 'video':
@@ -96,7 +98,7 @@ class YtLoader:
                     self.audio_streams.append(stream)
         return self.video_streams
     
-    def get_audio_streams(self):
+    def get_audio_streams(self) -> list[Stream]:
         if len(self.audio_streams) == 0:
             for stream in self._yt.streams:
                 if stream.type == 'video':
@@ -105,12 +107,9 @@ class YtLoader:
                     self.audio_streams.append(stream)
         return self.audio_streams
     
-    def download_media(self, video_stream : Optional[Stream] = None, audio_stream : Optional[Stream] = None):
+    def download_media(self, video_stream : Optional[Stream] = None, audio_stream : Optional[Stream] = None) -> MediaContainer:
         if not video_stream and not audio_stream:
             return None
-        # if self.media: проверить video_stream audio_stream те же или нет
-        #     logging.info(f"[yt_loader:download_media] already download")
-        #     return self.media
         save_path=self.config.get('save_path', '.')
         if not os.path.exists(save_path):
             os.makedirs(save_path)
@@ -149,6 +148,16 @@ class YtLoader:
                 audio_media.clip.close()
                 os.remove(video_path)
                 os.remove(audio_path)
-        # self.media = media
         return media
 
+if __name__ == "__main__":
+    import sys
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+    yt = YtLoader()
+    if yt.open_youtube_link('https://www.youtube.com/watch?v=5DJ8GVAwpBE'):
+        audio = yt.get_audio_streams()
+        video = yt.get_video_streams()
+        # media = yt.download_media(video_stream=video[3], audio_stream=None)
+        media = yt.download_media(video_stream=video[0], audio_stream=audio[4])
+        files = media.split_media_into_chunks(chunk_size_mb = 49.9)
+        print(f'files: {files}')
