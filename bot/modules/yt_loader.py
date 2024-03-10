@@ -1,7 +1,9 @@
 import json, os, logging, re, pathlib, subprocess
-from typing import Optional
+from typing import Optional, Tuple
 from pytube import YouTube, Stream
 from moviepy.editor import VideoFileClip, AudioFileClip
+from datetime import datetime
+import asyncio
 
 def get_media_info(file_path):
     cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', file_path]
@@ -12,11 +14,154 @@ def get_media_info(file_path):
     media_info = json.loads(result.stdout)
     return media_info
 
+def get_result_name_ext(video_stream : Optional[Stream] = None, audio_stream : Optional[Stream] = None) -> Tuple[str, str, str]:
+    src_title = ""
+    video_reso = ""
+    audio_reso = ""
+    ext = ""
+
+    if video_stream:
+        src_title = video_stream.title
+        video_reso = video_stream.resolution
+        ext = video_stream.subtype
+        
+    if audio_stream:
+        audio_reso = audio_stream.abr
+        if not video_stream:
+            src_title = audio_stream.title
+            ext = audio_stream.subtype
+    
+    title = re.sub(r'[^\w]', ' ', src_title)
+    title = title.replace(' ','_')
+    reso = f'{video_reso}_{audio_reso}'if video_reso and audio_reso else f'{video_reso}{audio_reso}'
+    
+    return f'{title}_{reso}', ext, src_title
+
+class DownloadResult:
+    def __init__(self, src_title : str, filetype : str, chunks : list[str]):
+        self.src_title = src_title
+        self.chunks = chunks
+        self.filetype = filetype
+            
+    def print(self):
+        print(f'Downloaded {self.filetype}: {self.src_title}')
+        for file in self.chunks:
+            print(f'    - {file}')
+        print('')
+
+class DownloadInfo:
+    progress_pattern = re.compile(r'size=\s*([^\s]+)\s+time=(\d+:\d+:\d+\.\d+)\s+bitrate=\s*([^\s]+)\s+speed=\s*([^\s]+)')
+    duration_pattern = re.compile(r'Duration: (\d+:\d+:\d+\.\d+)')
+    
+    def __init__(self, src_title, filetype):
+        self.lock = asyncio.Lock()
+        self.duration = '00:00:00.00'
+        self.time = '00:00:00.00'
+        self.percentage : float = 0.0
+        self.src_title = src_title
+        self.filetype = filetype
+        
+    async def _update_progress(self):
+        duration = datetime.strptime(self.duration, "%H:%M:%S.%f") - datetime.strptime('00:00:00.00', "%H:%M:%S.%f")
+        elapsed = datetime.strptime(self.time, "%H:%M:%S.%f") - datetime.strptime('00:00:00.00', "%H:%M:%S.%f")
+        self.percentage = (elapsed.total_seconds() / duration.total_seconds()) * 100 if duration.total_seconds() > 0 else 0
+        
+    async def parse_info(self, log_line : str):
+        duration_match = re.match(DownloadInfo.duration_pattern, log_line.strip())
+        progress_match = re.match(DownloadInfo.progress_pattern, log_line.strip())
+        if duration_match or progress_match:
+            async with self.lock:
+                if duration_match:
+                        self.duration = duration_match.group(1)
+                if progress_match:
+                        self.time = progress_match.group(2)
+                await self._update_progress()
+
+    async def get_progress(self):
+        async with self.lock:
+            return self.percentage
+
+class Downloader:
+    def __init__(self):
+        self.lock = asyncio.Lock()
+        self.info : DownloadInfo = None
+        self.result : DownloadResult = None
+
+    async def _create_chunks(self, source_file1 : str, result_file_name : str, ext : str, source_file2='', segment_len=600, result_dir='./downloads'):
+        if len(source_file2):
+            source_file2=f' -i \"{source_file2}\"'
+        command = f'ffmpeg -i \"{source_file1}\"{source_file2} -c:v copy -c:a copy -progress pipe:2 -f segment -segment_time {segment_len} -reset_timestamps 1 \"{result_dir}/{result_file_name}_segment_%03d.{ext}\"'
+        
+        process = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE)
+        
+        while True:
+            line = await process.stderr.readline()
+            if not line:
+                break
+            async with self.lock:
+                await self.info.parse_info(line.decode())
+        
+        await process.wait()
+        if process.returncode != 0:
+            raise Exception(f"Ошибка при выполнении команды: {command}. Код возврата: {process.returncode}")
+        
+        paths = sorted(pathlib.Path(result_dir).glob(f'{result_file_name}_segment_*{ext}'))
+        async with self.lock:
+            self.result = DownloadResult(src_title = self.info.src_title, filetype = self.info.filetype, chunks = list(map(str, paths)))
+
+    async def download(self, video_stream : Optional[Stream] = None, audio_stream : Optional[Stream] = None, result_dir = './downloads'):
+        file=""
+        second_file=""
+        if video_stream:
+            file=video_stream.url
+            filetype = "video"
+            
+        if audio_stream:
+            if video_stream:
+                second_file=audio_stream.url
+            else:
+                file=audio_stream.url
+                filetype = "audio"
+                
+        if not file:
+            raise Exception("download: empty source")
+        
+        result_name, ext, src_title = get_result_name_ext(video_stream, audio_stream)
+        async with self.lock:
+            self.info = DownloadInfo(src_title = src_title, filetype = filetype)
+            
+        await self._create_chunks(source_file1 = file, source_file2 = second_file, result_file_name = result_name, ext = ext, result_dir = result_dir)
+
+    async def has_info(self):
+        async with self.lock:
+            return bool(self.info)
+        
+    async def has_result(self):
+        async with self.lock:
+            return bool(self.result)
+
+# async def split_file(file : str, src_title : str, filetype : str, segment_len=600):
+#     pfile = pathlib.Path(file)
+    
+#     result_dir = pfile.parent
+#     ext = pfile.suffix
+#     name = pfile.stem
+#     downloader = DownloadExecutor(src_title = src_title, filetype = filetype)
+#     await downloader._create_chunks(file=file, segment_len = segment_len, result_dir = result_dir, file_name=name, ext=ext)
+#     return downloader
+
 class MediaContainer:
     def __init__(self, file, stream : Stream):
         self.is_audio = not stream.includes_video_track
         self.is_video = stream.includes_video_track
         self.set_source_file(file)
+        
+    def close(self):
+        self.clip.close()
+
 
     def get_source_file(self):
         return os.path.join(self.dir, f"{self.name}{self.ext}")
@@ -35,12 +180,18 @@ class MediaContainer:
         else:
             raise Exception('MediaContainer is not media')
 
-    def split_video_ffmpeg(self, clip_max_duration):
+    def split_video_ffmpeg(self, clip_max_duration) -> list[str]:
         output_file = os.path.join(self.dir, f"{self.name}_chunk_%03d{self.ext}")
         logging.info(f"[yt_loader:split_video_ffmpeg] segment_time {clip_max_duration}")
-        command = f'ffmpeg -i {self.get_source_file()} -c:v copy -c:a copy -segment_time {clip_max_duration} -map 0 -f segment {output_file}'
-        subprocess.call(command, shell=True)
-        paths = sorted(pathlib.Path(self.dir).glob(f'{self.name}_chunk_*'))
+        if self.is_audio:
+            command = f'ffmpeg -i {self.get_source_file()} -c:a copy -segment_time {clip_max_duration} -map 0 -f segment {output_file}'
+        else:
+            command = f'ffmpeg -i {self.get_source_file()} -c:v copy -c:a copy -segment_time {clip_max_duration} -map 0 -f segment {output_file}'
+        result = subprocess.run(command, shell=True)
+        if result.returncode != 0:
+            print("Error running ffprobe:", result.stderr)
+            return None
+        paths = sorted(pathlib.Path(self.dir).glob(f'{self.name}_chunk_*{self.ext}'))
         return list(map(str, paths))
 
     def split_media_into_chunks(self, chunk_size_mb):
@@ -122,7 +273,7 @@ class YtLoader:
         
         if audio_stream:
             logging.info(f"[yt_loader:download_media] audio loading")
-            audio_path = os.path.join(save_path, f'{title}_{audio_stream.abr}.mp3')
+            audio_path = os.path.join(save_path, f'{title}_{audio_stream.abr}.{audio_stream.subtype}')
             audio_stream.download(filename=audio_path)
             logging.info(f"[yt_loader:download_media] audio ready. Creating container")
             audio_media=MediaContainer(file=audio_path, stream=audio_stream)
@@ -150,14 +301,37 @@ class YtLoader:
                 os.remove(audio_path)
         return media
 
-if __name__ == "__main__":
+async def run_example():
     import sys
     logging.basicConfig(level=logging.INFO, stream=sys.stdout)
     yt = YtLoader()
-    if yt.open_youtube_link('https://www.youtube.com/watch?v=5DJ8GVAwpBE'):
+    # if yt.open_youtube_link('https://www.youtube.com/watch?v=81RWdKEnt4Y'):
+    if yt.open_youtube_link('https://www.youtube.com/watch?v=aHiVHZYM9m4'):
         audio = yt.get_audio_streams()
         video = yt.get_video_streams()
-        # media = yt.download_media(video_stream=video[3], audio_stream=None)
-        media = yt.download_media(video_stream=video[0], audio_stream=audio[4])
-        files = media.split_media_into_chunks(chunk_size_mb = 49.9)
-        print(f'files: {files}')
+        
+        # for video_stream, audio_stream in [(video[15], None), (video[14], None), (None, audio[4]), (video[15], audio[4]), (video[14], audio[4])]:
+        # for video_stream, audio_stream in [(None, None), (video[1], None)]:
+        for video_stream, audio_stream in [(None, None), (video[1], None), (video[1], audio[0]), (None, audio[0])]:
+            try:
+                downloader = Downloader()
+                # await downloader.download(video_stream=video_stream, audio_stream=audio_stream)
+                download_task = asyncio.create_task(downloader.download(video_stream=video_stream, audio_stream=audio_stream))
+                print(f'let`s try download: {video_stream}, {audio_stream}')
+                while not download_task.done():
+                    if await downloader.has_info():
+                        progress = await downloader.info.get_progress()
+                        if progress > 0:
+                            print(f'progress: {progress:.3f}%')
+                    await asyncio.sleep(0.5)
+                            
+                if not download_task.exception():
+                    while not await downloader.has_result():
+                        pass
+                    downloader.result.print()
+                
+            except Exception as e:
+                    print(f'Exeption: {str(e)}')
+
+if __name__ == "__main__":
+    asyncio.run(run_example())
