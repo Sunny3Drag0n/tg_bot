@@ -22,7 +22,7 @@ async def startup():
 
 async def main() -> None:
     try:
-        dp.include_routers(handlers.yt_loader_handler.router, handlers.default_commands_handler.router)
+        dp.include_routers(handlers.yt_loader_handlers.router, handlers.default_commands_handlers.router)
         dp.startup.register(startup)
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)

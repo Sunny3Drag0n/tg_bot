@@ -38,7 +38,15 @@ class Loader(AsyncExecutor):
     duration_pattern = re.compile(r'Duration: (\d+:\d+:\d+\.\d+)')
     def __init__(self, source_file1 : str, result_file_name : str, result_ext : str, source_file2='', segment_len=600, result_dir='./downloads'):
         if len(source_file2):
-                    source_file2=f' -i \"{source_file2}\"'
+            source_file2=f' -i \"{source_file2}\"'
+
+        if not Path(result_dir).exists():
+            Path.mkdir(result_dir)
+            
+        self._result_dir = result_dir
+        self._result_file_suffix = result_file_name
+        self._result_ext = result_ext
+
         command = f"""ffmpeg \
         -i \"{source_file1}\"{source_file2} \
         -c:v copy -c:a copy \
@@ -65,23 +73,26 @@ class Loader(AsyncExecutor):
         elapsed = datetime.strptime(self.time, "%H:%M:%S.%f") - datetime.strptime('00:00:00.00', "%H:%M:%S.%f")
         return (elapsed.total_seconds() / duration.total_seconds()) * 100 if duration.total_seconds() > 0 else 0
 
+    async def get_resources(self) -> list[str]:
+        paths = sorted(Path(self._result_dir).glob(f'{self._result_file_suffix}_segment_*{self._result_ext}'))
+        return list(map(str, paths))
+
 
 ## testing
-async def _progress_cb(progress : float):
-    print(f'progressbar: {progress}%')
-
-async def _download():
-    try:
-        source_file1='downloads/C___с_нуля_до_джуна___C___ROADMAP___Подробный_план_обучения_720p_48kbps_segment_000.mp4'
-        result_ext = Path(source_file1).suffix[1:]
-        d = Loader(source_file1=source_file1, result_file_name='other', result_ext=result_ext)
-        task = await asyncio.create_task(d.execute())
-        await d.wait(_progress_cb)
-        if d.done:
-            print('done')
-
-    except Exception as e:
-        print(e)
-    
 if __name__ == "__main__":
-    asyncio.run(_download()) 
+    async def _progress_cb(progress : float):
+        print(f'progressbar: {progress}%')
+
+    async def _download():
+        try:
+            source_file1='downloads/C___с_нуля_до_джуна___C___ROADMAP___Подробный_план_обучения_720p_48kbps_segment_000.mp4'
+            result_ext = Path(source_file1).suffix[1:]
+            d = Loader(source_file1=source_file1, result_file_name='other', result_ext=result_ext)
+            task = await asyncio.create_task(d.execute())
+            await d.wait(_progress_cb)
+            if d.done:
+                print(await d.get_resources())
+
+        except Exception as e:
+            print(e)
+    asyncio.run(_download())
