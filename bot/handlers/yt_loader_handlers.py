@@ -37,10 +37,15 @@ def format_stream_info(stream):
     return f'{info}[size:{stream.filesize_mb} Mb]'
         
 async def select_download(message : Message, state: FSMContext):
+    logging.debug(f"[select_download] set_state download_type_selection")
     await state.set_state(DownloadState.download_type_selection)
+    
+    logging.debug(f"[select_download] get current_state_data")
     current_state_data = await state.get_data()
     link = current_state_data.get('link')
     video_streams, audio_streams = cashed_links[link]
+    
+    logging.debug(f"[select_download] create message text")
     l = []
     if len(video_streams):
         l.append(["Скачать видео 📼", "yt_loader_select_video"])
@@ -166,7 +171,8 @@ async def yt_loader_link_message(message: Message, link_match : Match[str], stat
         if not link in cashed_links:
             video_streams, audio_streams = open_link(link)
             cashed_links[link] = Tuple[video_streams, audio_streams]
-            
+            logging.debug(f"create cash for link: {link}")
+
         await state.update_data(link = link)
         await select_download(message, state)
         
