@@ -42,7 +42,7 @@ class Loader(AsyncExecutor):
 
         if not Path(result_dir).exists():
             Path.mkdir(result_dir)
-            
+
         self._result_dir = result_dir
         self._result_file_suffix = result_file_name
         self._result_ext = result_ext
@@ -54,10 +54,10 @@ class Loader(AsyncExecutor):
         -f segment -segment_time {segment_len} \
         -reset_timestamps 1 \
         \"{result_dir}/{result_file_name}_segment_%03d.{result_ext}\""""
-        
+
         self.duration = '00:00:00.00'
         self.time = '00:00:00.00'
-        
+
         AsyncExecutor.__init__(self, command=command, progress_parser=self.parse_info)
 
     async def parse_info(self, log_line : str):
@@ -68,7 +68,7 @@ class Loader(AsyncExecutor):
                 self.duration = duration_match.group(1)
             if progress_match:
                 self.time = progress_match.group(2)
-                
+
         duration = datetime.strptime(self.duration, "%H:%M:%S.%f") - datetime.strptime('00:00:00.00', "%H:%M:%S.%f")
         elapsed = datetime.strptime(self.time, "%H:%M:%S.%f") - datetime.strptime('00:00:00.00', "%H:%M:%S.%f")
         return (elapsed.total_seconds() / duration.total_seconds()) * 100 if duration.total_seconds() > 0 else 0
@@ -76,23 +76,3 @@ class Loader(AsyncExecutor):
     async def get_resources(self) -> list[str]:
         paths = sorted(Path(self._result_dir).glob(f'{self._result_file_suffix}_segment_*{self._result_ext}'))
         return list(map(str, paths))
-
-
-## testing
-if __name__ == "__main__":
-    async def _progress_cb(progress : float):
-        print(f'progressbar: {progress}%')
-
-    async def _download():
-        try:
-            source_file1='downloads/C___с_нуля_до_джуна___C___ROADMAP___Подробный_план_обучения_720p_48kbps_segment_000.mp4'
-            result_ext = Path(source_file1).suffix[1:]
-            d = Loader(source_file1=source_file1, result_file_name='other', result_ext=result_ext)
-            task = await asyncio.create_task(d.execute())
-            await d.wait(_progress_cb)
-            if d.done:
-                print(await d.get_resources())
-
-        except Exception as e:
-            print(e)
-    asyncio.run(_download())

@@ -1,1 +1,1 @@
-from . import yt_loader
+from modules.media_loader import *

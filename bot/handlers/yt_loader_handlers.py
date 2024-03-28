@@ -10,7 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 import keyboards as GUI
 
-from modules.yt_loader import Stream, StreamLoader, open_link
+from modules.media_loader import StreamLoader, open_link, Stream
 
 router = Router()
 cashed_links : dict[str, Tuple[list[Stream], list[Stream]]] = {}
